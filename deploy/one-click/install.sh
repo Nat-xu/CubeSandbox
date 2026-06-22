@@ -888,19 +888,22 @@ else
   log "primary network interface not detected; keeping packaged Cubelet eth_name"
 fi
 
-# Validate cubevs CIDR from env var (if set)
+# Validate the effective cubevs CIDR before installing packages or replacing
+# the existing deployment. If unset, use CubeSandbox's fixed packaged default.
 CUBE_SANDBOX_NETWORK_CIDR="${CUBE_SANDBOX_NETWORK_CIDR:-}"
+# On upgrade the CIDR is the cluster's own (preserved from the old install);
+# its existing cubevs bridge/route would self-trigger the host-conflict scan,
+# so skip conflict detection (format validation still runs) while still
+# honoring an explicit user bypass flag.
+cidr_skip_conflict=0
+if [[ "${INSTALL_MODE}" == "upgrade" || "${CUBE_SANDBOX_NETWORK_CIDR_SKIP_CONFLICT_CHECK:-0}" == "1" ]]; then
+  cidr_skip_conflict=1
+fi
 if [[ -n "${CUBE_SANDBOX_NETWORK_CIDR}" ]]; then
-  # On upgrade the CIDR is the cluster's own (preserved from the old install);
-  # its existing cubevs bridge/route would self-trigger the host-conflict scan,
-  # so skip conflict detection (format validation still runs) while still
-  # honoring an explicit user bypass flag.
-  cidr_skip_conflict=0
-  if [[ "${INSTALL_MODE}" == "upgrade" || "${CUBE_SANDBOX_NETWORK_CIDR_SKIP_CONFLICT_CHECK:-0}" == "1" ]]; then
-    cidr_skip_conflict=1
-  fi
-  check_cidr_preflight "${CUBE_SANDBOX_NETWORK_CIDR}" "${cidr_skip_conflict}"
+  check_cidr_preflight "${CUBE_SANDBOX_NETWORK_CIDR}" "${cidr_skip_conflict}" "CUBE_SANDBOX_NETWORK_CIDR"
   export CUBE_SANDBOX_NETWORK_CIDR
+else
+  check_cidr_preflight "192.168.0.0/18" "${cidr_skip_conflict}" "default CubeSandbox network CIDR"
 fi
 
 install_required_dependencies
