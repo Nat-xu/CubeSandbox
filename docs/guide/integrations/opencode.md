@@ -155,7 +155,7 @@ result = sandbox.commands.run(
     "cd /workspace && opencode --non-interactive --provider openai "
     "--prompt 'Create hello.py that prints Hello from CubeSandbox and run it.'",
     envs={"OPENAI_API_KEY": key},
-    user="root",
+    user="agent",
     timeout=900,
 )
 ```
@@ -182,7 +182,7 @@ engine at the SDK layer:
 
 - `sandbox.pause()` snapshots the running VM (memory + rootfs) and frees compute.
 - `Sandbox.connect(sandbox_id)` resumes with `/workspace`, OpenCode's config
-  directory (`/root/.config/opencode`), and every other file intact.
+  directory (`/home/agent/.config/opencode`), and every other file intact.
 
 > **Lifecycle caveat:** manage the sandbox lifecycle with `try/finally`, not a
 > `with Sandbox.create(...)` context manager. On `__exit__` the context manager
@@ -195,7 +195,7 @@ try:
     run_turn(sandbox, prompt_1)          # writes /workspace/plan.md
     sandbox_id = sandbox.pause() or sandbox.sandbox_id
     sandbox = Sandbox.connect(sandbox_id)
-    verify_state_survived(sandbox)       # /workspace + /root/.config/opencode intact
+    verify_state_survived(sandbox)       # /workspace + /home/agent/.config/opencode intact
     run_turn(sandbox, prompt_2)          # continues the work
 finally:
     sandbox.kill()
@@ -221,7 +221,7 @@ cmd = (
     "cd /workspace && opencode --non-interactive --provider openai "
     "--prompt 'Inspect the project, run app.py, and summarize the result.'"
 )
-result = sandbox.commands.run(cmd, envs={"OPENAI_API_KEY": key}, user="root", timeout=900)
+result = sandbox.commands.run(cmd, envs={"OPENAI_API_KEY": key}, user="agent", timeout=900)
 ```
 
 ### Preflight version check
@@ -241,7 +241,7 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 EOF
-""", user="root", timeout=60)
+""", user="agent", timeout=60)
 ```
 
 ## Caveats
@@ -249,13 +249,13 @@ EOF
 - **Node.js version.** OpenCode needs a recent Node runtime; the base image
   ships an older apt Node, so always install via NodeSource (the Dockerfile
   does this).
-- **Agent config directory.** `/root/.config/opencode` holds OpenCode's
+- **Agent config directory.** `/home/agent/.config/opencode` holds OpenCode's
   configuration and session state. Keep it empty of credentials in the image;
   the Dockerfile creates a minimal `opencode.json` with only the default
   provider and model.
 - **Direct-flavor key persistence.** With the direct flavor (`envs=`) the key is
   scoped to the exec call, but OpenCode may cache provider credentials under its
-  config dir (`/root/.config/opencode/`), which survives `pause()` /
+  config dir (`/home/agent/.config/opencode/`), which survives `pause()` /
   `resume()`. For strict isolation prefer the CubeEgress vault pattern, where
   the key never enters the VM.
 - **Egress side-effects.** Tasks that `npm install` or fetch MCP tools need

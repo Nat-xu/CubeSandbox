@@ -104,7 +104,7 @@ python resume_opencode.py --sandbox-id <run_opencode.py 输出的 id>
 
 第一轮（由 `run_opencode.py` 执行）在 `/workspace` 写入产物并调用
 `sandbox.pause()`。本脚本用 `Sandbox.connect(sandbox_id)` 恢复，校验
-`/workspace` 与 OpenCode 配置目录（`/root/.config/opencode`）在快照后仍存在，
+`/workspace` 与 OpenCode 配置目录（`/home/agent/.config/opencode`）在快照后仍存在，
 再执行第二轮续写。沙箱生命周期用 `try/finally` 手动管理（不用 context manager），
 避免 pause 后被过早 `kill` 掉。
 

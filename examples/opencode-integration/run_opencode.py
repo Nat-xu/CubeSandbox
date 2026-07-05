@@ -156,9 +156,13 @@ def main() -> int:
     # For shared/production use, pair default-deny egress with the CubeEgress
     # credential vault (see docs/guide/security-proxy.md and the pi-agent
     # network_policy.py example).
+    # Pre-initialize so the finally block is safe even when Sandbox.create()
+    # raises — without this, an uncaught exception would cause UnboundLocalError
+    # in finally, shadowing the original error.
+    sandbox = None
+    paused = False
     sandbox = Sandbox.create(template=template_id, timeout=args.sandbox_timeout)
     sid = sandbox_id(sandbox)
-    paused = False
 
     try:
         print(f"Sandbox ready: {sid}")
@@ -210,7 +214,7 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
     finally:
-        if not paused:
+        if not paused and sandbox is not None:
             safe_kill(sandbox)
 
 

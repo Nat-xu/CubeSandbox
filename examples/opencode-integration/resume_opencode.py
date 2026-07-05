@@ -139,6 +139,10 @@ def main() -> int:
     # under /home/agent/.config/opencode, widening exposure — for shared clusters
     # prefer the default-deny + vault pattern (see docs/guide/security-proxy.md
     # and the pi-agent network_policy.py example).
+    # Pre-initialize so the finally block is safe even when Sandbox.connect()
+    # raises — without this, an uncaught exception would cause UnboundLocalError
+    # in finally, shadowing the original error.
+    sandbox = None
     sandbox = Sandbox.connect(sandbox_id=sandbox_id_arg)
     sid = sandbox_id(sandbox)
 
@@ -170,7 +174,8 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 1
     finally:
-        safe_kill(sandbox)
+        if sandbox is not None:
+            safe_kill(sandbox)
 
 
 if __name__ == "__main__":

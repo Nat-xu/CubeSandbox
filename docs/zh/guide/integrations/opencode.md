@@ -152,7 +152,7 @@ result = sandbox.commands.run(
     "cd /workspace && opencode --non-interactive --provider openai "
     "--prompt '创建 hello.py 打印 Hello from CubeSandbox 并运行它。'",
     envs={"OPENAI_API_KEY": key},
-    user="root",
+    user="agent",
     timeout=900,
 )
 ```
@@ -175,7 +175,7 @@ python resume_opencode.py --sandbox-id <run_opencode.py 输出的 id>
 
 - `sandbox.pause()` 对运行中的 VM（内存 + rootfs）打快照并释放算力。
 - `Sandbox.connect(sandbox_id)` 恢复时，`/workspace`、OpenCode 配置目录
-  （`/root/.config/opencode`）及其他文件都完好无损。
+  （`/home/agent/.config/opencode`）及其他文件都完好无损。
 
 > **生命周期注意：** 用 `try/finally` 手动管理沙箱，不要用 `with Sandbox.create(...)`
 > context manager。context manager 在 `__exit__` 时会 kill 沙箱，这会让 pause
@@ -187,7 +187,7 @@ try:
     run_turn(sandbox, prompt_1)          # 写入 /workspace/plan.md
     sandbox_id = sandbox.pause() or sandbox.sandbox_id
     sandbox = Sandbox.connect(sandbox_id)
-    verify_state_survived(sandbox)       # /workspace + /root/.config/opencode 仍在
+    verify_state_survived(sandbox)       # /workspace + /home/agent/.config/opencode 仍在
     run_turn(sandbox, prompt_2)          # 继续工作
 finally:
     sandbox.kill()
@@ -211,7 +211,7 @@ cmd = (
     "cd /workspace && opencode --non-interactive --provider openai "
     "--prompt 'Inspect the project, run app.py, and summarize the result.'"
 )
-result = sandbox.commands.run(cmd, envs={"OPENAI_API_KEY": key}, user="root", timeout=900)
+result = sandbox.commands.run(cmd, envs={"OPENAI_API_KEY": key}, user="agent", timeout=900)
 ```
 
 ### preflight 版本检查
@@ -231,18 +231,18 @@ def main() -> None:
 if __name__ == "__main__":
     main()
 EOF
-""", user="root", timeout=60)
+""", user="agent", timeout=60)
 ```
 
 ## 注意事项
 
 - **Node.js 版本。** OpenCode 需要较新的 Node 运行时；基础镜像自带的 apt Node
   偏旧，务必通过 NodeSource 安装（Dockerfile 已如此）。
-- **Agent 配置目录。** `/root/.config/opencode` 保存 OpenCode 的配置与会话状态。
+- **Agent 配置目录。** `/home/agent/.config/opencode` 保存 OpenCode 的配置与会话状态。
   镜像里保持它不含凭证；Dockerfile 创建的最小 `opencode.json` 仅含默认 provider
   和 model。
 - **直连方式的密钥留存。** 直连方式（`envs=`）下密钥仅作用于该 exec 调用，但
-  OpenCode 可能把 provider 凭证缓存到其配置目录（`/root/.config/opencode/`），
+  OpenCode 可能把 provider 凭证缓存到其配置目录（`/home/agent/.config/opencode/`），
   会在 `pause()` / `resume()` 后仍留在盘上。对隔离要求高时优先用 CubeEgress
   保险柜方式，密钥完全不进入 VM。
 - **出网副作用。** 需要 `npm install` 或拉取 MCP 工具的任务，要放行相应 host 或

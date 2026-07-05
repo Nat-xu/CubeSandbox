@@ -110,7 +110,7 @@ python resume_opencode.py --sandbox-id <id-from-run_opencode.py>
 
 Turn 1 (run by `run_opencode.py`) writes artifacts to `/workspace` and calls
 `sandbox.pause()`. This script reconnects with `Sandbox.connect(sandbox_id)`,
-verifies `/workspace` and the OpenCode config directory (`/root/.config/opencode`)
+verifies `/workspace` and the OpenCode config directory (`/home/agent/.config/opencode`)
 survived the snapshot, then runs turn 2 to continue the work. The sandbox
 lifecycle is managed manually with `try/finally` (not a context manager), so the
 pause is not undone by an early `kill`.
