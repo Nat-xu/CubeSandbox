@@ -208,8 +208,12 @@ def cleanup_credentials(sandbox: Sandbox) -> None:
         print("Credential cleanup raised an exception:", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
-    # Verify: nothing besides opencode.json should remain under the config dir.
+    # Verify: the config directory must exist and contain nothing besides
+    # opencode.json.  Two-phase check so a missing directory is flagged
+    # rather than silently treated as clean.
     verify_cmd = (
+        f"test -d {OPENCODE_CONFIG_DIR} || "
+        f"(printf 'STALE: config directory is missing after cleanup\\n' && exit 1); "
         f"stale=$(find {OPENCODE_CONFIG_DIR} -type f ! -name 'opencode.json' 2>/dev/null); "
         f"test -z \"$stale\" || (printf 'STALE: %s\\n' \"$stale\" && exit 1)"
     )
