@@ -182,12 +182,20 @@ def cleanup_credentials(sandbox: Sandbox) -> None:
     Failures are logged to stderr (including a full traceback) so operators
     are aware that credentials may be present in the snapshot.
     """
-    paths = [
+    patterns = [
         f"{OPENCODE_CONFIG_DIR}/credentials*",
         f"{OPENCODE_CONFIG_DIR}/sessions/*/credentials*",
     ]
-    rm_cmd = shell_join(*(f"rm -rf {p}" for p in paths))
-    verify_cmd = shell_join(*(f"test ! -e {p} || (echo 'STALE: {p}' && exit 1)" for p in paths))
+    rm_cmd = shell_join(*(f"rm -rf {p}" for p in patterns))
+
+    # Use find + grep to verify deletion.  ``test ! -e glob`` breaks when the
+    # glob matches multiple files (too many arguments), so we use a find-based
+    # check that handles zero, one, or many matches correctly.
+    find_conditions = " -o ".join(f"-name '{p.split('/')[-1]}'" for p in patterns)
+    verify_cmd = (
+        f"stale=$(find {OPENCODE_CONFIG_DIR} -type f \\( {find_conditions} \\) 2>/dev/null); "
+        f"test -z \"$stale\" || (printf 'STALE credentials remain:\\\\n%s\\\\n' \"$stale\" && exit 1)"
+    )
 
     try:
         result = sandbox.commands.run(rm_cmd, user="agent", timeout=30)
