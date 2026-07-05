@@ -22,18 +22,24 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import sys
 
 from dotenv import load_dotenv
 from e2b import Sandbox
 
 from _common import (
+    OPENCODE_CONFIG_DIR,
+    WORKSPACE,
+    CommandFailedError,
+    MissingConfigError,
+    build_opencode_cmd,
     cleanup_credentials,
     ensure_success,
+    print_result,
     required,
     resolve_provider_key,
     run,
+    safe_kill,
     sandbox_id,
     shell_join,
 )
@@ -41,9 +47,6 @@ from _common import (
 # ---------------------------------------------------------------------------
 # constants
 # ---------------------------------------------------------------------------
-
-WORKSPACE = "/workspace"
-OPENCODE_CONFIG_DIR = "/home/agent/.config/opencode"
 
 TURN_2_PROMPT = (
     "Read /workspace/plan.md and implement step 1 by creating "
@@ -116,24 +119,24 @@ def _show_final_workspace(sandbox: Sandbox) -> None:
 
 def main() -> int:
     load_dotenv()
-    args = parse_args()
 
-    required("E2B_API_URL")
-    required("E2B_API_KEY")
-    llm_api_key = resolve_provider_key(args.provider)
+    try:
+        args = parse_args()
+        required("E2B_API_URL")
+        required("E2B_API_KEY")
+        llm_api_key = resolve_provider_key(args.provider)
+    except MissingConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     prompt = args.prompt or TURN_2_PROMPT
-    opencode_cmd = (
-        f"cd {WORKSPACE} && "
-        f"opencode --non-interactive --provider {shlex.quote(args.provider)} "
-        f"--prompt {shlex.quote(prompt)}"
-    )
+    opencode_cmd = build_opencode_cmd(args.provider, prompt)
 
     sandbox_id_arg = args.sandbox_id
     print(f"Reconnecting to sandbox: {sandbox_id_arg}")
     # SECURITY: like run_opencode.py this demo keeps egress open and injects the
     # key per command. The pause() snapshot also captures any credentials cached
-    # under /root/.config/opencode, widening exposure — for shared clusters
+    # under /home/agent/.config/opencode, widening exposure — for shared clusters
     # prefer the default-deny + vault pattern (see docs/guide/security-proxy.md
     # and the pi-agent network_policy.py example).
     sandbox = Sandbox.connect(sandbox_id=sandbox_id_arg)
@@ -156,32 +159,18 @@ def main() -> int:
         # Wipe any credentials OpenCode may have cached in the resumed session.
         cleanup_credentials(sandbox)
 
-        # Print results
-        stdout = getattr(result, "stdout", "")
-        stderr = getattr(result, "stderr", "")
-        exit_code = getattr(result, "exit_code", 1)
-
-        if stdout:
-            print(stdout)
-        if stderr:
-            print(stderr, file=sys.stderr)
-
-        print(f"\nOpenCode exit code: {exit_code}")
+        exit_code = print_result(result)
 
         print("\n--- /workspace final state ---")
         _show_final_workspace(sandbox)
 
-        return 0 if exit_code is None else int(exit_code)
+        return exit_code
+
+    except CommandFailedError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     finally:
-        if sandbox is not None:
-            try:
-                sandbox.kill()
-                print(f"\nSandbox {sid} killed.")
-            except Exception as exc:  # noqa: BLE001
-                print(
-                    f"Warning: failed to kill sandbox {sid}: {exc}",
-                    file=sys.stderr,
-                )
+        safe_kill(sandbox)
 
 
 if __name__ == "__main__":

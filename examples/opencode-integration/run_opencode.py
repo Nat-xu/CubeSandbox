@@ -23,18 +23,23 @@ from __future__ import annotations
 
 import argparse
 import os
-import shlex
 import sys
 
 from dotenv import load_dotenv
 from e2b import Sandbox
 
 from _common import (
+    WORKSPACE,
+    CommandFailedError,
+    MissingConfigError,
+    build_opencode_cmd,
     cleanup_credentials,
     ensure_success,
+    print_result,
     required,
     resolve_provider_key,
     run,
+    safe_kill,
     sandbox_id,
     shell_join,
 )
@@ -47,8 +52,6 @@ DEFAULT_PROMPT = (
     "Inspect the project in /workspace, run python3 app.py, and write a "
     "concise summary of the result to /workspace/result.md."
 )
-
-WORKSPACE = "/workspace"
 
 
 def _seed_project(sandbox: Sandbox) -> None:
@@ -132,19 +135,19 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     load_dotenv()
-    args = parse_args()
 
-    template_id = args.template or required("CUBE_TEMPLATE_ID")
-    required("E2B_API_URL")
-    required("E2B_API_KEY")
-    llm_api_key = resolve_provider_key(args.provider)
+    try:
+        args = parse_args()
+        template_id = args.template or required("CUBE_TEMPLATE_ID")
+        required("E2B_API_URL")
+        required("E2B_API_KEY")
+        llm_api_key = resolve_provider_key(args.provider)
+    except MissingConfigError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
 
     prompt = args.prompt or DEFAULT_PROMPT
-    opencode_cmd = (
-        f"cd {WORKSPACE} && "
-        f"opencode --non-interactive --provider {shlex.quote(args.provider)} "
-        f"--prompt {shlex.quote(prompt)}"
-    )
+    opencode_cmd = build_opencode_cmd(args.provider, prompt)
 
     print(f"Creating sandbox from template: {template_id}")
     # SECURITY: this direct-key demo keeps egress open (allow_internet_access
@@ -156,7 +159,6 @@ def main() -> int:
     sandbox = Sandbox.create(template=template_id, timeout=args.sandbox_timeout)
     sid = sandbox_id(sandbox)
     paused = False
-    exit_code = 1
 
     try:
         print(f"Sandbox ready: {sid}")
@@ -181,17 +183,7 @@ def main() -> int:
         # Wipe any credentials OpenCode may have cached before snapshotting.
         cleanup_credentials(sandbox)
 
-        # Print results
-        stdout = getattr(result, "stdout", "")
-        stderr = getattr(result, "stderr", "")
-        exit_code = getattr(result, "exit_code", 1)
-
-        if stdout:
-            print(stdout)
-        if stderr:
-            print(stderr, file=sys.stderr)
-
-        print(f"\nOpenCode exit code: {exit_code}")
+        exit_code = print_result(result)
 
         print("\n--- /workspace final state ---")
         _show_workspace(sandbox)
@@ -199,19 +191,27 @@ def main() -> int:
         # Pause the sandbox (snapshot VM + rootfs) so it can be resumed later
         print(f"\nPausing sandbox {sid} (snapshotting VM + rootfs)...")
         paused_id = sandbox.pause()
-        if isinstance(paused_id, str) and paused_id:
-            sid = paused_id
+
+        if not isinstance(paused_id, str) or not paused_id:
+            print(
+                f"Error: sandbox.pause() returned {paused_id!r} (expected a non-empty str). "
+                "The sandbox may not be resumable.",
+                file=sys.stderr,
+            )
+            return 1
+
+        sid = paused_id
         paused = True
         print(f"Sandbox paused. Resume with: python resume_opencode.py --sandbox-id {sid}")
 
+        return exit_code
+
+    except CommandFailedError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     finally:
         if not paused:
-            try:
-                sandbox.kill()
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                pass
-
-    return 0 if exit_code is None else int(exit_code)
+            safe_kill(sandbox)
 
 
 if __name__ == "__main__":
