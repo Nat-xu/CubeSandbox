@@ -41,8 +41,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user for the agent's runtime operations.  KVM isolation
-# protects the host, but defense-in-depth inside the guest is still valuable.
+# Non-root user for agent commands executed via the SDK.  The container's
+# entrypoint (envd) must remain root, so there is no USER directive here.
+# Instead, the SDK driver (_common.py:run) passes user="agent" on every
+# sandbox.commands.run call, so OpenCode and user-supplied commands run
+# without root inside the guest.  KVM isolation protects the host, while
+# this user provides defense-in-depth inside the VM.
 RUN useradd --create-home --shell /bin/bash agent
 
 # Install OpenCode in its own layer so a version bump only rebuilds this step.

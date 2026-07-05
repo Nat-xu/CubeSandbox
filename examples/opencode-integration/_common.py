@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 import traceback
 
@@ -133,8 +134,6 @@ def ensure_success(result, label: str) -> None:
 
 def build_opencode_cmd(provider: str, prompt: str, workspace: str = WORKSPACE) -> str:
     """Return a shell command string that invokes OpenCode non-interactively."""
-    import shlex
-
     return (
         f"cd {shlex.quote(workspace)} && "
         f"opencode --non-interactive --provider {shlex.quote(provider)} "
@@ -172,33 +171,35 @@ def print_result(result) -> int:
 
 
 def cleanup_credentials(sandbox: Sandbox) -> None:
-    """Remove cached credentials from the OpenCode config directory.
+    """Remove cached credentials from the sandbox before pausing.
 
-    OpenCode may cache provider API keys under its config directory during
-    execution.  When ``sandbox.pause()`` snapshots the VM these cached keys
-    persist in the snapshot and would be recoverable by anyone who resumes the
-    sandbox.  This helper wipes known cache paths so the snapshot is clean.
+    Wipes the entire OpenCode config directory (including any cached
+    credentials, session state, and auth tokens), then recreates the
+    minimal ``opencode.json`` skeleton so OpenCode still finds a valid
+    config on resume.  Also cleans shell history, ``.npmrc``, and XDG
+    data directories that an agent could write tokens to.
 
     Failures are logged to stderr (including a full traceback) so operators
     are aware that credentials may be present in the snapshot.
     """
-    patterns = [
-        f"{OPENCODE_CONFIG_DIR}/credentials*",
-        f"{OPENCODE_CONFIG_DIR}/sessions/*/credentials*",
-    ]
-    rm_cmd = shell_join(*(f"rm -rf {p}" for p in patterns))
-
-    # Use find + grep to verify deletion.  ``test ! -e glob`` breaks when the
-    # glob matches multiple files (too many arguments), so we use a find-based
-    # check that handles zero, one, or many matches correctly.
-    find_conditions = " -o ".join(f"-name '{p.split('/')[-1]}'" for p in patterns)
-    verify_cmd = (
-        f"stale=$(find {OPENCODE_CONFIG_DIR} -type f \\( {find_conditions} \\) 2>/dev/null); "
-        f"test -z \"$stale\" || (printf 'STALE credentials remain:\\\\n%s\\\\n' \"$stale\" && exit 1)"
+    # Wipe and recreate the config directory — removes credentials*, sessions/,
+    # auth/, and anything else the agent cached there.
+    recreate_config = (
+        f"rm -rf {OPENCODE_CONFIG_DIR} && "
+        f"mkdir -p {OPENCODE_CONFIG_DIR} && "
+        f"printf '%s\\n' '{{' '  \"provider\": \"openai\",' '  \"model\": \"gpt-4.1\"' '}}' "
+        f"> {OPENCODE_CONFIG_DIR}/opencode.json"
+    )
+    # Clean other common credential-leakage vectors.
+    clean_other = (
+        f"rm -f /home/agent/.bash_history /home/agent/.npmrc && "
+        f"rm -rf /home/agent/.local/share/opencode"
     )
 
+    cmd = shell_join(recreate_config, clean_other)
+
     try:
-        result = sandbox.commands.run(rm_cmd, user="agent", timeout=30)
+        result = sandbox.commands.run(cmd, user="agent", timeout=30)
         exit_code = getattr(result, "exit_code", None)
         if exit_code is not None and exit_code != 0:
             stderr = getattr(result, "stderr", "")
@@ -207,7 +208,12 @@ def cleanup_credentials(sandbox: Sandbox) -> None:
         print("Credential cleanup raised an exception:", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
 
-    # Verify the files are actually gone.
+    # Verify: nothing besides opencode.json should remain under the config dir.
+    verify_cmd = (
+        f"stale=$(find {OPENCODE_CONFIG_DIR} -type f ! -name 'opencode.json' 2>/dev/null); "
+        f"test -z \"$stale\" || (printf 'STALE: %s\\n' \"$stale\" && exit 1)"
+    )
+
     try:
         result = sandbox.commands.run(verify_cmd, user="agent", timeout=30)
         exit_code = getattr(result, "exit_code", None)

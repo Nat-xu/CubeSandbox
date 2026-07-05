@@ -47,9 +47,9 @@ docker build --platform linux/amd64 \
 docker push <your-registry>/opencode-cube:latest
 ```
 
-The image installs `opencode-ai`, plus `git`, `python3`, `ripgrep`, `jq`, and
-cleans apt/npm caches. The OpenCode version is installed via `@latest`; pin a
-specific version in the `Dockerfile` if reproducibility matters.
+The image installs `opencode-ai` (pinned via `OPENCODE_VERSION` build arg,
+default `1.17.0`; bump the ARG in the Dockerfile to upgrade), plus `git`,
+`python3`, `ripgrep`, `jq`, and cleans apt/npm caches.
 
 ## 2. Register as a Cube template
 

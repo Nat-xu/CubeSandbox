@@ -46,8 +46,9 @@ docker build --platform linux/amd64 \
 docker push <your-registry>/opencode-cube:latest
 ```
 
-镜像会安装 `opencode-ai`，以及 `git`、`python3`、`ripgrep`、`jq`，并清理 apt/npm
-缓存。OpenCode 版本默认安装 `@latest`；如需固定版本请修改 `Dockerfile`。
+镜像会安装 `opencode-ai`（通过 `OPENCODE_VERSION` 构建参数固定版本，默认
+`1.17.0`；升级时修改 Dockerfile 中的 ARG），以及 `git`、`python3`、`ripgrep`、
+`jq`，并清理 apt/npm 缓存。
 
 ## 2. 注册为 Cube 模板
 
