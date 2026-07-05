@@ -5,6 +5,7 @@
 .idea/
 .vscode/
 *.iml
+.understand-anything/
 
 # OS
 .DS_Store

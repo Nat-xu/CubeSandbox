@@ -8,6 +8,11 @@ Creates a sandbox, seeds a demo project into /workspace, executes OpenCode in
 non-interactive mode, prints the results, and pauses the sandbox so it can be
 resumed later with resume_opencode.py.
 
+Lifecycle note: this script deliberately avoids ``with Sandbox.create(...)``.
+A context manager kills the sandbox on ``__exit__``, which would destroy the
+sandbox that was just paused.  The lifecycle is managed manually with
+try/finally — we only kill when something fails *before* the pause succeeds.
+
 Usage:
     python run_opencode.py
     python run_opencode.py --prompt "Create hello.py and run it"
@@ -24,40 +29,15 @@ import sys
 from dotenv import load_dotenv
 from e2b import Sandbox
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-
-def _required(name: str) -> str:
-    value = os.environ.get(name, "")
-    if not value:
-        print(f"Missing required environment variable: {name}", file=sys.stderr)
-        sys.exit(1)
-    return value
-
-
-def _shell_join(*commands: str) -> str:
-    return " && ".join(commands)
-
-
-def _run(sandbox: Sandbox, cmd: str, **kwargs):
-    """Run a command in the sandbox and return the result object."""
-    return sandbox.commands.run(cmd, user="root", **kwargs)
-
-
-def _ensure_success(result, label: str) -> None:
-    exit_code = getattr(result, "exit_code", None)
-    if exit_code is not None and exit_code != 0:
-        stderr = getattr(result, "stderr", "")
-        print(f"Error in {label} (exit {exit_code}): {stderr}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _sandbox_id(sandbox: Sandbox) -> str:
-    sid = getattr(sandbox, "sandbox_id", None)
-    return str(sid) if sid else "unknown"
-
+from _common import (
+    cleanup_credentials,
+    ensure_success,
+    required,
+    resolve_provider_key,
+    run,
+    sandbox_id,
+    shell_join,
+)
 
 # ---------------------------------------------------------------------------
 # defaults
@@ -88,19 +68,19 @@ if __name__ == "__main__":
     main()
 EOF
 """
-    result = _run(sandbox, cmd, timeout=60)
-    _ensure_success(result, "seed workspace")
+    result = run(sandbox, cmd, timeout=60)
+    ensure_success(result, "seed workspace")
 
 
 def _show_workspace(sandbox: Sandbox) -> None:
     """Print the workspace listing and result.md (if it exists)."""
-    cmd = _shell_join(
+    cmd = shell_join(
         f"ls -la {WORKSPACE}",
         f"test ! -f {WORKSPACE}/result.md || "
         f"(printf '\\n--- result.md ---\\n' && cat {WORKSPACE}/result.md)",
     )
-    result = _run(sandbox, cmd, timeout=60)
-    _ensure_success(result, "inspect workspace")
+    result = run(sandbox, cmd, timeout=60)
+    ensure_success(result, "inspect workspace")
     stdout = getattr(result, "stdout", "")
     if stdout:
         print(stdout)
@@ -154,44 +134,36 @@ def main() -> int:
     load_dotenv()
     args = parse_args()
 
-    template_id = args.template or _required("CUBE_TEMPLATE_ID")
-    _required("E2B_API_URL")
-    _required("E2B_API_KEY")
-
-    # Resolve the provider key — prefer an env var matching the provider, but
-    # also fall back to OPENAI_API_KEY for the most common path.
-    provider = args.provider
-    provider_key_env = f"{provider.upper()}_API_KEY"
-    llm_api_key = os.environ.get(provider_key_env) or os.environ.get("OPENAI_API_KEY")
-    if not llm_api_key:
-        print(
-            f"Missing LLM API key: set {provider_key_env} or OPENAI_API_KEY",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    template_id = args.template or required("CUBE_TEMPLATE_ID")
+    required("E2B_API_URL")
+    required("E2B_API_KEY")
+    llm_api_key = resolve_provider_key(args.provider)
 
     prompt = args.prompt or DEFAULT_PROMPT
     opencode_cmd = (
         f"cd {WORKSPACE} && "
-        f"opencode --non-interactive --provider {shlex.quote(provider)} "
+        f"opencode --non-interactive --provider {shlex.quote(args.provider)} "
         f"--prompt {shlex.quote(prompt)}"
     )
 
     print(f"Creating sandbox from template: {template_id}")
-    result = None
     # SECURITY: this direct-key demo keeps egress open (allow_internet_access
     # defaults to True) for simplicity, and injects the provider key per command
     # via envs=. A compromised agent with open egress could exfiltrate that key.
     # For shared/production use, pair default-deny egress with the CubeEgress
     # credential vault (see docs/guide/security-proxy.md and the pi-agent
     # network_policy.py example).
-    with Sandbox.create(template=template_id, timeout=args.sandbox_timeout) as sandbox:
-        sid = _sandbox_id(sandbox)
+    sandbox = Sandbox.create(template=template_id, timeout=args.sandbox_timeout)
+    sid = sandbox_id(sandbox)
+    paused = False
+    exit_code = 1
+
+    try:
         print(f"Sandbox ready: {sid}")
 
         # Preflight: verify OpenCode is installed
-        version_result = _run(sandbox, "opencode --version", timeout=60)
-        _ensure_success(version_result, "check OpenCode version")
+        version_result = run(sandbox, "opencode --version", timeout=60)
+        ensure_success(version_result, "check OpenCode version")
         print(f"OpenCode version: {getattr(version_result, 'stdout', '').strip()}")
 
         if not args.no_seed:
@@ -199,17 +171,20 @@ def main() -> int:
             print(f"Seeded demo project in {WORKSPACE}")
 
         print("\nRunning OpenCode task...\n")
-        result = _run(
+        result = run(
             sandbox,
             opencode_cmd,
-            envs={f"{provider.upper()}_API_KEY": llm_api_key},
+            envs={f"{args.provider.upper()}_API_KEY": llm_api_key},
             timeout=args.exec_timeout,
         )
+
+        # Wipe any credentials OpenCode may have cached before snapshotting.
+        cleanup_credentials(sandbox)
 
         # Print results
         stdout = getattr(result, "stdout", "")
         stderr = getattr(result, "stderr", "")
-        exit_code = getattr(result, "exit_code", None)
+        exit_code = getattr(result, "exit_code", 1)
 
         if stdout:
             print(stdout)
@@ -226,7 +201,15 @@ def main() -> int:
         paused_id = sandbox.pause()
         if isinstance(paused_id, str) and paused_id:
             sid = paused_id
+        paused = True
         print(f"Sandbox paused. Resume with: python resume_opencode.py --sandbox-id {sid}")
+
+    finally:
+        if not paused:
+            try:
+                sandbox.kill()
+            except Exception:  # noqa: BLE001 — best-effort cleanup
+                pass
 
     return 0 if exit_code is None else int(exit_code)
 

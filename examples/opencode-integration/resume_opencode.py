@@ -28,46 +28,22 @@ import sys
 from dotenv import load_dotenv
 from e2b import Sandbox
 
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-
-
-def _required(name: str) -> str:
-    value = os.environ.get(name, "")
-    if not value:
-        print(f"Missing required environment variable: {name}", file=sys.stderr)
-        sys.exit(1)
-    return value
-
-
-def _shell_join(*commands: str) -> str:
-    return " && ".join(commands)
-
-
-def _run(sandbox: Sandbox, cmd: str, **kwargs):
-    return sandbox.commands.run(cmd, user="root", **kwargs)
-
-
-def _ensure_success(result, label: str) -> None:
-    exit_code = getattr(result, "exit_code", None)
-    if exit_code is not None and exit_code != 0:
-        stderr = getattr(result, "stderr", "")
-        print(f"Error in {label} (exit {exit_code}): {stderr}", file=sys.stderr)
-        sys.exit(1)
-
-
-def _sandbox_id(sandbox: Sandbox) -> str:
-    sid = getattr(sandbox, "sandbox_id", None)
-    return str(sid) if sid else "unknown"
-
+from _common import (
+    cleanup_credentials,
+    ensure_success,
+    required,
+    resolve_provider_key,
+    run,
+    sandbox_id,
+    shell_join,
+)
 
 # ---------------------------------------------------------------------------
 # constants
 # ---------------------------------------------------------------------------
 
 WORKSPACE = "/workspace"
-OPENCODE_CONFIG_DIR = "/root/.config/opencode"
+OPENCODE_CONFIG_DIR = "/home/agent/.config/opencode"
 
 TURN_2_PROMPT = (
     "Read /workspace/plan.md and implement step 1 by creating "
@@ -111,14 +87,14 @@ def parse_args() -> argparse.Namespace:
 
 def _verify_state(sandbox: Sandbox) -> None:
     """Verify /workspace and the OpenCode config directory survived the snapshot."""
-    cmd = _shell_join(
+    cmd = shell_join(
         f"test -d {WORKSPACE}",
         f"test -d {OPENCODE_CONFIG_DIR}",
         "printf '\\n--- Workspace files (survived pause/resume) ---\\n'",
         f"ls -la {WORKSPACE}",
     )
-    result = _run(sandbox, cmd, timeout=60)
-    _ensure_success(result, "verify /workspace and OpenCode state survived pause/resume")
+    result = run(sandbox, cmd, timeout=60)
+    ensure_success(result, "verify /workspace and OpenCode state survived pause/resume")
     stdout = getattr(result, "stdout", "")
     if stdout:
         print(stdout)
@@ -126,13 +102,13 @@ def _verify_state(sandbox: Sandbox) -> None:
 
 def _show_final_workspace(sandbox: Sandbox) -> None:
     """Print the workspace listing and progress.md (if it exists)."""
-    cmd = _shell_join(
+    cmd = shell_join(
         f"ls -la {WORKSPACE}",
         f"test ! -f {WORKSPACE}/progress.md || "
         f"(printf '\\n--- progress.md ---\\n' && cat {WORKSPACE}/progress.md)",
     )
-    result = _run(sandbox, cmd, timeout=60)
-    _ensure_success(result, "inspect final workspace")
+    result = run(sandbox, cmd, timeout=60)
+    ensure_success(result, "inspect final workspace")
     stdout = getattr(result, "stdout", "")
     if stdout:
         print(stdout)
@@ -142,35 +118,26 @@ def main() -> int:
     load_dotenv()
     args = parse_args()
 
-    _required("E2B_API_URL")
-    _required("E2B_API_KEY")
-
-    provider = args.provider
-    provider_key_env = f"{provider.upper()}_API_KEY"
-    llm_api_key = os.environ.get(provider_key_env) or os.environ.get("OPENAI_API_KEY")
-    if not llm_api_key:
-        print(
-            f"Missing LLM API key: set {provider_key_env} or OPENAI_API_KEY",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    required("E2B_API_URL")
+    required("E2B_API_KEY")
+    llm_api_key = resolve_provider_key(args.provider)
 
     prompt = args.prompt or TURN_2_PROMPT
     opencode_cmd = (
         f"cd {WORKSPACE} && "
-        f"opencode --non-interactive --provider {shlex.quote(provider)} "
+        f"opencode --non-interactive --provider {shlex.quote(args.provider)} "
         f"--prompt {shlex.quote(prompt)}"
     )
 
-    sandbox_id = args.sandbox_id
-    print(f"Reconnecting to sandbox: {sandbox_id}")
+    sandbox_id_arg = args.sandbox_id
+    print(f"Reconnecting to sandbox: {sandbox_id_arg}")
     # SECURITY: like run_opencode.py this demo keeps egress open and injects the
     # key per command. The pause() snapshot also captures any credentials cached
     # under /root/.config/opencode, widening exposure — for shared clusters
     # prefer the default-deny + vault pattern (see docs/guide/security-proxy.md
     # and the pi-agent network_policy.py example).
-    sandbox = Sandbox.connect(sandbox_id=sandbox_id)
-    sid = _sandbox_id(sandbox)
+    sandbox = Sandbox.connect(sandbox_id=sandbox_id_arg)
+    sid = sandbox_id(sandbox)
 
     try:
         print(f"Reconnected. Sandbox ID: {sid}")
@@ -179,17 +146,20 @@ def main() -> int:
         _verify_state(sandbox)
 
         print("\n=== Turn 2: continue the work ===\n")
-        result = _run(
+        result = run(
             sandbox,
             opencode_cmd,
-            envs={f"{provider.upper()}_API_KEY": llm_api_key},
+            envs={f"{args.provider.upper()}_API_KEY": llm_api_key},
             timeout=args.exec_timeout,
         )
+
+        # Wipe any credentials OpenCode may have cached in the resumed session.
+        cleanup_credentials(sandbox)
 
         # Print results
         stdout = getattr(result, "stdout", "")
         stderr = getattr(result, "stderr", "")
-        exit_code = getattr(result, "exit_code", None)
+        exit_code = getattr(result, "exit_code", 1)
 
         if stdout:
             print(stdout)

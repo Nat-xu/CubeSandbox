@@ -22,6 +22,7 @@ FROM ${CUBE_BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG NODE_MAJOR=24
+ARG OPENCODE_VERSION=1.17.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -40,14 +41,18 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Create a non-root user for the agent's runtime operations.  KVM isolation
+# protects the host, but defense-in-depth inside the guest is still valuable.
+RUN useradd --create-home --shell /bin/bash agent
+
 # Install OpenCode in its own layer so a version bump only rebuilds this step.
-RUN npm install -g --ignore-scripts opencode-ai@latest \
+RUN npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}" \
     && opencode --version \
     && npm cache clean --force \
     && rm -rf /root/.npm
 
 # OpenCode state directory ─ created at build time but carries no credentials.
-ENV OPENCODE_CONFIG_DIR=/root/.config/opencode
+ENV OPENCODE_CONFIG_DIR=/home/agent/.config/opencode
 
 RUN mkdir -p /workspace "${OPENCODE_CONFIG_DIR}" \
     && printf '%s\n' \
@@ -55,7 +60,8 @@ RUN mkdir -p /workspace "${OPENCODE_CONFIG_DIR}" \
         '  "provider": "openai",' \
         '  "model": "gpt-4.1"' \
         '}' \
-        > "${OPENCODE_CONFIG_DIR}/opencode.json"
+        > "${OPENCODE_CONFIG_DIR}/opencode.json" \
+    && chown -R agent:agent /workspace "${OPENCODE_CONFIG_DIR}"
 
 WORKDIR /workspace
 

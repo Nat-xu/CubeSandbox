@@ -22,6 +22,7 @@ opencode-integration/
 ├── Dockerfile            # CubeSandbox 模板镜像（Node.js + OpenCode CLI）
 ├── .env.example          # 复制为 .env 并填写
 ├── requirements.txt      # 宿主端驱动依赖（e2b、python-dotenv）
+├── _common.py            # 共享辅助（沙箱操作、密钥解析、凭据清理）
 ├── run_opencode.py       # 一次性 OpenCode 任务
 ├── resume_opencode.py    # pause / resume 会话持久化
 ├── README.md             # 英文文档

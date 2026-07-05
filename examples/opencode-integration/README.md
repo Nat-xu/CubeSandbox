@@ -23,6 +23,7 @@ opencode-integration/
 ├── Dockerfile            # CubeSandbox template image (Node.js + OpenCode CLI)
 ├── .env.example          # Copy to .env and fill in
 ├── requirements.txt      # Host driver deps (e2b, python-dotenv)
+├── _common.py            # Shared helpers (sandbox ops, key resolution, cleanup)
 ├── run_opencode.py       # One-shot OpenCode task
 ├── resume_opencode.py    # Pause / resume session persistence
 ├── README.md             # English docs (this file)

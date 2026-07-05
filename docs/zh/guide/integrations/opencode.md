@@ -65,18 +65,26 @@ ARG CUBE_BASE_IMAGE=ghcr.io/tencentcloud/cubesandbox-base:2026.16
 FROM ${CUBE_BASE_IMAGE}
 
 ARG NODE_MAJOR=24
+ARG OPENCODE_VERSION=1.17.0
 
+# 系统包 + Node.js（第一层）
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl git gnupg jq less procps python3 python3-pip ripgrep \
     && curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g --ignore-scripts opencode-ai@latest \
+    && rm -rf /var/lib/apt/lists/*
+
+# 非 root 用户（guest 内深度防御）
+RUN useradd --create-home --shell /bin/bash agent
+
+# OpenCode CLI ─ 固定版本，独立层（第二层）
+RUN npm install -g --ignore-scripts "opencode-ai@${OPENCODE_VERSION}" \
     && opencode --version \
     && npm cache clean --force \
-    && rm -rf /root/.npm /var/lib/apt/lists/*
+    && rm -rf /root/.npm
 
-ENV OPENCODE_CONFIG_DIR=/root/.config/opencode
+ENV OPENCODE_CONFIG_DIR=/home/agent/.config/opencode
 
 RUN mkdir -p /workspace "${OPENCODE_CONFIG_DIR}" \
     && printf '%s\n' \
@@ -84,7 +92,8 @@ RUN mkdir -p /workspace "${OPENCODE_CONFIG_DIR}" \
         '  "provider": "openai",' \
         '  "model": "gpt-4.1"' \
         '}' \
-        > "${OPENCODE_CONFIG_DIR}/opencode.json"
+        > "${OPENCODE_CONFIG_DIR}/opencode.json" \
+    && chown -R agent:agent /workspace "${OPENCODE_CONFIG_DIR}"
 
 WORKDIR /workspace
 EXPOSE 49983
